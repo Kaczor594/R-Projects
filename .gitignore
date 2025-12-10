@@ -1,0 +1,29 @@
+# R files
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+
+# Database files (optional - you might want to include small databases)
+*.db
+*.sqlite
+*.sqlite3
+
+# Excel files (these are often large and binary)
+*.xlsx
+*.xls
+
+# Data directory (if you want to exclude all data files)
+# data/
+
+# System files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+*.Rproj
+
+# Output files
+holly_unified_budget_analysis*.xlsx
+holly_budget*.xlsx

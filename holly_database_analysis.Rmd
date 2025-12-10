@@ -1,0 +1,467 @@
+---
+title: "Holly Bronze Database Analysis"
+subtitle: "R Version - Municipal Data Analysis with Leading Zero Fixes"
+author: "Database Analysis"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: show
+    theme: flatly
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE, 
+  warning = FALSE, 
+  message = FALSE,
+  fig.width = 10,
+  fig.height = 6
+)
+```
+
+# 📊 Holly Bronze Database - R Analysis
+
+This R Markdown document provides an interactive interface for analyzing the Holly Bronze SQLite database, with special focus on fixing the leading zero padding issues for department numbers and GL numbers.
+
+## 🔧 Setup and Database Connection
+
+```{r load-libraries}
+# Load required libraries
+suppressPackageStartupMessages({
+  library(DBI)        # Database interface
+  library(RSQLite)    # SQLite driver for R
+  library(dplyr)      # Data manipulation
+  library(dbplyr)     # Database backend for dplyr
+  library(glue)       # String interpolation
+  library(knitr)      # Pretty table printing
+  library(DT)         # Interactive tables
+  library(ggplot2)    # Visualization
+  library(plotly)     # Interactive plots
+})
+
+cat("✅ All packages loaded successfully!\n")
+```
+
+```{r database-connection}
+# Database configuration
+DB_PATH <- "/Users/isaackaczor/VS-Code/R-Projects/holly_bronze.db"
+
+# Function to create database connection
+get_connection <- function() {
+  if (!file.exists(DB_PATH)) {
+    stop(paste("Database", DB_PATH, "not found!"))
+  }
+  DBI::dbConnect(RSQLite::SQLite(), DB_PATH)
+}
+
+# Function to execute SQL queries and return data frame
+query <- function(sql) {
+  conn <- get_connection()
+  on.exit(DBI::dbDisconnect(conn))
+  
+  result <- DBI::dbGetQuery(conn, sql)
+  return(as.data.frame(result))
+}
+
+# Function to execute SQL statements
+execute_sql <- function(sql) {
+  conn <- get_connection()
+  on.exit(DBI::dbDisconnect(conn))
+  
+  result <- DBI::dbExecute(conn, sql)
+  return(result)
+}
+
+# Test connection
+cat("🔌 Testing database connection...\n")
+test_result <- try({
+  test_query <- "SELECT name FROM sqlite_master WHERE type='table' LIMIT 1"
+  result <- query(test_query)
+  
+  table_count <- query("SELECT COUNT(*) as count FROM sqlite_master WHERE type='table'")
+  
+  cat("✅ Successfully connected to", basename(DB_PATH), "\n")
+  cat("✅ Database contains", table_count$count, "tables\n")
+  TRUE
+}, silent = TRUE)
+
+if (inherits(test_result, "try-error")) {
+  cat("❌ Connection failed:", attr(test_result, "condition")$message, "\n")
+}
+```
+
+## 📋 Database Exploration
+
+```{r explore-tables}
+# Get all tables
+tables_sql <- "SELECT name as table_name FROM sqlite_master WHERE type='table' ORDER BY name"
+all_tables <- query(tables_sql)
+
+cat("📊 Total tables:", nrow(all_tables), "\n\n")
+
+# Display tables in an interactive table
+DT::datatable(
+  all_tables, 
+  caption = "All Database Tables",
+  options = list(
+    pageLength = 15,
+    scrollY = "300px",
+    dom = 'ft'
+  )
+)
+```
+
+```{r table-structure-function}
+# Function to describe table structure
+describe_table <- function(table_name) {
+  columns_sql <- glue("PRAGMA table_info(`{table_name}`);")
+  columns <- query(columns_sql)
+  
+  count_sql <- glue("SELECT COUNT(*) as row_count FROM `{table_name}`;")
+  count <- query(count_sql)
+  
+  cat("=== Table:", table_name, "===\n")
+  cat("Rows:", format(count$row_count, big.mark = ","), "\n")
+  cat("Columns:", nrow(columns), "\n\n")
+  
+  return(columns[, c("name", "type", "notnull", "pk")])
+}
+
+# Example: Show structure of a sample table
+if ("critical_road_improvements_1" %in% all_tables$table_name) {
+  cat("🏗️ Example table structure:\n")
+  sample_structure <- describe_table("critical_road_improvements_1")
+  kable(sample_structure, caption = "critical_road_improvements_1 Structure")
+}
+```
+
+## 🔢 Leading Zero Padding Fix
+
+The main issue: Department numbers and GL numbers are stored as integers but should display with leading zeros (e.g., "001" instead of 1).
+
+```{r padding-diagnostic}
+# Check current state of department_number and gl_number
+cat("🔍 DIAGNOSING PADDING ISSUES...\n")
+
+# Look for tables with the problematic columns
+known_tables <- c(
+  'as_of_6_30_24', 'as-of-6-30-24',
+  'as_of_6_30_25', 'as-of-6-30-25', 
+  'general_25_26', 'general-25-26'
+)
+
+padding_tables <- list()
+
+for (table_name in known_tables) {
+  table_exists <- try({
+    table_check <- query(glue("SELECT name FROM sqlite_master WHERE name = '{table_name}' LIMIT 1"))
+    if (nrow(table_check) > 0) {
+      actual_table <- table_check$name[1]
+      
+      # Check if it has target columns
+      cols <- query(glue("PRAGMA table_info(`{actual_table}`)"))
+      col_names <- tolower(cols$name)
+      
+      dept_col <- cols$name[grepl("department", col_names)][1]
+      gl_col <- cols$name[grepl("gl_number", col_names)][1]
+      
+      if (!is.na(dept_col) || !is.na(gl_col)) {
+        padding_tables[[actual_table]] <- list(
+          table = actual_table,
+          dept_col = if(!is.na(dept_col)) dept_col else NULL,
+          gl_col = if(!is.na(gl_col)) gl_col else NULL
+        )
+        
+        cat("✅ Found:", actual_table, "\n")
+        cat("   Dept column:", if(!is.na(dept_col)) dept_col else "None", "\n")
+        cat("   GL column:", if(!is.na(gl_col)) gl_col else "None", "\n\n")
+      }
+    }
+    TRUE
+  }, silent = TRUE)
+}
+
+cat("📊 Found", length(padding_tables), "tables needing padding fixes\n")
+```
+
+```{r show-current-issue}
+# Show the current padding issue
+if (length(padding_tables) > 0) {
+  first_table <- padding_tables[[1]]
+  table_name <- first_table$table
+  dept_col <- first_table$dept_col
+  gl_col <- first_table$gl_col
+  
+  cat("🔴 CURRENT ISSUE - Missing Leading Zeros:\n")
+  
+  if (!is.null(dept_col) && !is.null(gl_col)) {
+    current_sql <- glue("
+      SELECT {dept_col}, {gl_col},
+             typeof({dept_col}) as dept_type,
+             typeof({gl_col}) as gl_type,
+             length(CAST({dept_col} AS TEXT)) as dept_length,
+             length(CAST({gl_col} AS TEXT)) as gl_length
+      FROM `{table_name}` 
+      LIMIT 5
+    ")
+    
+    current_data <- query(current_sql)
+    kable(current_data, caption = paste("Current Data from", table_name))
+  }
+}
+```
+
+```{r create-padded-views}
+# Create padded views to fix the issue
+cat("🛠️ CREATING PADDED VIEWS...\n")
+
+created_views <- character()
+
+for (table_info in padding_tables) {
+  result <- try({
+    table_name <- table_info$table
+    dept_col <- table_info$dept_col
+    gl_col <- table_info$gl_col
+    
+    view_name <- paste0(table_name, "_PADDED")
+    
+    # Build SELECT statement
+    select_parts <- "*"  # Keep all original columns
+    
+    if (!is.null(dept_col)) {
+      select_parts <- paste0(select_parts, ",\n       ",
+                            glue("PRINTF('%03d', CAST(`{dept_col}` AS INTEGER)) as {dept_col}_padded"))
+    }
+    
+    if (!is.null(gl_col)) {
+      select_parts <- paste0(select_parts, ",\n       ",
+                            glue("PRINTF('%04d', CAST(`{gl_col}` AS INTEGER)) as {gl_col}_padded"))
+    }
+    
+    # Create view SQL
+    view_sql <- glue("
+      CREATE OR REPLACE VIEW `{view_name}` AS
+      SELECT {select_parts}
+      FROM `{table_name}`;
+    ")
+    
+    # Execute view creation
+    execute_sql(view_sql)
+    created_views <- c(created_views, view_name)
+    
+    cat("✅ Created:", view_name, "\n")
+    TRUE
+  }, silent = TRUE)
+  
+  if (inherits(result, "try-error")) {
+    cat("❌ Failed to create view for", table_info$table, "\n")
+  }
+}
+
+cat("\n🎉 Successfully created", length(created_views), "padded views!\n")
+```
+
+```{r show-fixed-data}
+# Show the fix in action
+if (length(created_views) > 0 && length(padding_tables) > 0) {
+  first_table <- padding_tables[[1]]
+  table_name <- first_table$table
+  dept_col <- first_table$dept_col
+  gl_col <- first_table$gl_col
+  view_name <- created_views[1]
+  
+  cat("🟢 FIXED DATA - With Leading Zeros:\n")
+  
+  if (!is.null(dept_col) && !is.null(gl_col)) {
+    fixed_sql <- glue("
+      SELECT {dept_col}, {dept_col}_padded, {gl_col}, {gl_col}_padded
+      FROM `{view_name}` 
+      LIMIT 5
+    ")
+    
+    fixed_data <- query(fixed_sql)
+    kable(fixed_data, caption = paste("Fixed Data from", view_name))
+  }
+}
+```
+
+## 📊 Data Analysis Examples
+
+Now that we have the padding fixed, let's do some analysis!
+
+```{r road-improvements}
+# Road Improvements Analysis
+cat("🛣️ ROAD IMPROVEMENTS ANALYSIS\n")
+
+road_query <- "
+  SELECT 
+    segment_name,
+    proposed_treatment,
+    estimated_cost,
+    current_rating,
+    surface_subtype
+  FROM critical_road_improvements_1 
+  WHERE estimated_cost IS NOT NULL
+  ORDER BY estimated_cost DESC 
+  LIMIT 10
+"
+
+road_data <- query(road_query)
+
+DT::datatable(
+  road_data,
+  caption = "Top 10 Most Expensive Road Improvements",
+  options = list(pageLength = 10, scrollX = TRUE)
+) %>%
+  DT::formatCurrency("estimated_cost", "$")
+```
+
+```{r road-analysis-chart}
+# Road conditions summary
+road_summary_query <- "
+  SELECT 
+    current_rating,
+    COUNT(*) as segment_count,
+    ROUND(AVG(estimated_cost), 0) as avg_cost,
+    ROUND(SUM(estimated_cost), 0) as total_cost
+  FROM critical_road_improvements_1 
+  WHERE estimated_cost IS NOT NULL
+  GROUP BY current_rating
+  ORDER BY current_rating
+"
+
+road_summary <- query(road_summary_query)
+
+# Create interactive plot
+p <- ggplot(road_summary, aes(x = factor(current_rating), y = total_cost)) +
+  geom_col(fill = "steelblue", alpha = 0.7) +
+  geom_text(aes(label = paste0("$", format(total_cost, big.mark = ","))), 
+            vjust = -0.5) +
+  labs(
+    title = "Total Road Improvement Costs by Current Rating",
+    x = "Current Rating",
+    y = "Total Cost ($)",
+    caption = "Lower ratings indicate worse road conditions"
+  ) +
+  theme_minimal() +
+  scale_y_continuous(labels = scales::dollar_format())
+
+ggplotly(p)
+```
+
+```{r budget-analysis}
+# Budget Analysis with Padded Views
+if (length(created_views) > 0) {
+  cat("💰 BUDGET ANALYSIS (Using Padded Views)\n")
+  
+  # Find a budget table with padded view
+  budget_view <- created_views[grepl("general", created_views)][1]
+  
+  if (!is.na(budget_view)) {
+    budget_query <- glue("
+      SELECT 
+        department_name,
+        department_number_padded,
+        gl_number_padded,
+        account_description,
+        `202526_recommended_budget` as recommended_budget
+      FROM `{budget_view}`
+      WHERE `202526_recommended_budget` > 50000
+      ORDER BY `202526_recommended_budget` DESC
+      LIMIT 15
+    ")
+    
+    budget_data <- query(budget_query)
+    
+    DT::datatable(
+      budget_data,
+      caption = paste("Budget Analysis from", budget_view, "(>$50k items)"),
+      options = list(pageLength = 10, scrollX = TRUE)
+    ) %>%
+      DT::formatCurrency("recommended_budget", "$")
+  }
+}
+```
+
+## 🎯 Quick SQL Helper Functions
+
+```{r helper-functions}
+# Quick SQL execution function with pretty output
+sql_quick <- function(query_string) {
+  result <- query(query_string)
+  
+  if (nrow(result) > 0) {
+    DT::datatable(
+      result,
+      options = list(
+        pageLength = min(10, nrow(result)),
+        scrollX = TRUE,
+        dom = 'ft'
+      )
+    )
+  } else {
+    cat("No results returned.\n")
+    return(NULL)
+  }
+}
+
+# Function to show table sample
+show_sample <- function(table_name, n = 5) {
+  sample_sql <- glue("SELECT * FROM `{table_name}` LIMIT {n}")
+  result <- query(sample_sql)
+  
+  DT::datatable(
+    result,
+    caption = paste("Sample from", table_name, "(first", n, "rows)"),
+    options = list(
+      pageLength = n,
+      scrollX = TRUE,
+      dom = 'ft'
+    )
+  )
+}
+
+cat("✅ Helper functions ready!\n")
+cat("Use: sql_quick('SELECT * FROM table_name LIMIT 5')\n")
+cat("Use: show_sample('table_name')\n")
+```
+
+## 📝 Summary and Next Steps
+
+```{r summary}
+cat("🎉 R ANALYSIS COMPLETE!\n")
+cat("="*40, "\n")
+cat("✅ Database connected successfully\n")
+cat("✅ Found", nrow(all_tables), "tables in database\n")
+cat("✅ Created", length(created_views), "padded views for leading zero fixes\n")
+
+if (length(created_views) > 0) {
+  cat("\n🎯 Your new padded views:\n")
+  for (view in created_views) {
+    cat("   •", view, "\n")
+  }
+  
+  cat("\n💡 Now you can query with properly formatted numbers:\n")
+  cat("   • Department numbers: 001, 002, 003...\n")
+  cat("   • GL numbers: 0001, 0012, 0123...\n")
+}
+
+cat("\n🚀 Ready for analysis! Use the helper functions above.\n")
+```
+
+---
+
+## 🔧 Available Functions
+
+- `query(sql)` - Execute any SQL query
+- `sql_quick(sql)` - Execute SQL with interactive table output
+- `show_sample(table_name)` - Show sample data from any table
+- `describe_table(table_name)` - Show table structure
+
+## 📊 Padded Views Created
+
+Your original tables remain unchanged. The new `_PADDED` views show properly formatted numbers with leading zeros.
+
+*Happy analyzing with R! 📈*
