@@ -6,16 +6,8 @@ library(glue)       # String interpolation
 library(knitr)      # Pretty table printing
 library(readxl)     # Read Excel files
 
-# Use relative paths for collaboration
-# Place your Excel file in the project directory or a 'data' subdirectory
-excel_path <- file.path("data", "Holly_data_bronze.xlsx")
-DB_PATH <- "holly_bronze_r.db"
-
-# Create data directory if it doesn't exist
-if (!dir.exists("data")) {
-  dir.create("data")
-  cat("📁 Created 'data' directory. Please place Holly_data_bronze.xlsx here.\n")
-}
+excel_path <- "/Users/isaackaczor/Downloads/Holly_data_bronze.xlsx"
+DB_PATH <- "/Users/isaackaczor/VS-Code/R-Projects/holly_bronze_r.db"
 
 # Helper function to build CREATE TABLE SQL
 build_create_table_sql <- function(data, table_name, col_types) {
@@ -232,13 +224,21 @@ if (file.exists(DB_PATH)) {
 import_all_sheets(excel_path, DB_PATH)
 
 
-query("PRAGMA table_info(as_of_6_30_23)")
-query("SELECT * FROM general_25_26 LIMIT 5")
+query("PRAGMA table_info(as_of_6_30_21);")
+query("SELECT * FROM as_of_6_30_21 LIMIT 5")
 
 #table_name <- "as_of_6_30_24"
 
 # Step 1: Create the temp table (use execute_sql for CREATE statements)
 execute_sql("UPDATE general_25_26 SET gl_number = '101-205-000.000' WHERE gl_number = '205.101.000.000';")
+execute_sql("UPDATE as_of_6_30_21 SET gl_number = '101-250-818.005' WHERE gl_number = '101-250-490.005';")
+execute_sql("UPDATE as_of_6_30_23 SET gl_number = '101-250-818.005' WHERE gl_number = '101-250-490.005';")
+execute_sql("UPDATE as_of_6_30_24 SET gl_number = '818.005' WHERE fund_number = '101' AND department_number = '250' AND gl_number = '490.005';")
+execute_sql("UPDATE as_of_6_30_24 SET department_number = '250' WHERE fund_number = '101' AND department_number = '250' AND gl_number = '490.005';")
+execute_sql("UPDATE as_of_6_30_24 SET gl_number = '101' WHERE fund_number = '101' AND department_number = '250' AND gl_number = '490.005';")
+execute_sql("UPDATE as_of_6_30_25 SET gl_number = '818.005' WHERE fund_number = '101' AND department_number = '250' AND gl_number = '490.005';")
+execute_sql("UPDATE as_of_6_30_25 SET department_number = '250' WHERE fund_number = '101' AND department_number = '250' AND gl_number = '490.005';")
+execute_sql("UPDATE as_of_6_30_25 SET gl_number = '101' WHERE fund_number = '101' AND department_number = '250' AND gl_number = '490.005';")
 execute_sql("DROP TABLE IF EXISTS six_budget;")
 execute_sql("CREATE TABLE six_budget 
 AS 
@@ -254,17 +254,23 @@ FULL OUTER JOIN (SELECT *, 'Lake Improvement Fund' as fund_name FROM lake_improv
 FULL OUTER JOIN (SELECT *, 'Refuse Fund' as fund_name FROM refuse_25_26) refuse ON general.gl_number = refuse.gl_number
 FULL OUTER JOIN (SELECT *, 'Sewer Fund' as fund_name FROM sewer_25_26) sewer ON general.gl_number = sewer.gl_number
 FULL OUTER JOIN (SELECT *, 'Water Fund' as fund_name FROM water_25_26) water ON general.gl_number = water.gl_number")
+execute_sql("DROP TABLE IF EXISTS four;")
+execute_sql("CREATE TABLE four 
+AS
+SELECT *, 
+fund_number || '-' || department_number || '-' || gl_number as gl_full
+FROM as_of_6_30_24;")
+execute_sql("DROP TABLE IF EXISTS five;")
+execute_sql("CREATE TABLE five 
+AS
+SELECT *, 
+fund_number || '-' || department_number || '-' || gl_number as gl_full
+FROM as_of_6_30_25;")
 
 execute_sql("DROP TABLE IF EXISTS budget_data;")
 execute_sql("CREATE TABLE budget_data
 AS
-WITH a as (SELECT *, 
-fund_number || '-' || department_number || '-' || gl_number as gl_full
-FROM as_of_6_30_24),
-b as (SELECT *, 
-fund_number || '-' || department_number || '-' || gl_number as gl_full
-FROM as_of_6_30_25),
-unified as (SELECT COALESCE(one.fund_name, two.fund_name, three.fund_name, four.fund_name, five.fund_name, six.budget_fund_name) as fund_name,
+WITH unified as (SELECT COALESCE(one.fund_name, two.fund_name, three.fund_name, four.fund_name, five.fund_name, six.budget_fund_name) as fund_name,
                 COALESCE(one.department_name, two.department_name, three.department_name, four.department_name, five.department_name, six.department_name) as department_name,
                 COALESCE(one.gl_number, two.gl_number, three.gl_number, four.gl_full, five.gl_full, six.gl_number) as gl_number,
                 COALESCE(one.description, two.description, three.description, four.description, five.description, six.description) as description,
@@ -277,8 +283,8 @@ unified as (SELECT COALESCE(one.fund_name, two.fund_name, three.fund_name, four.
 FROM as_of_6_30_21 one
 FULL OUTER JOIN as_of_6_30_22 two ON one.gl_number = two.gl_number
 FULL OUTER JOIN as_of_6_30_23 three ON one.gl_number = three.gl_number
-FULL OUTER JOIN a four ON one.gl_number = four.gl_full
-FULL OUTER JOIN b five ON one.gl_number = five.gl_full
+FULL OUTER JOIN four ON one.gl_number = four.gl_full
+FULL OUTER JOIN five ON one.gl_number = five.gl_full
 FULL OUTER JOIN six_budget six ON one.gl_number = six.gl_number
 GROUP BY 1, 2, 3, 4
 ORDER BY gl_number ASC)
@@ -310,19 +316,18 @@ FROM budget_data;")
 # Step 3: Query the temp table (use query for SELECT statements)
 query("SELECT * FROM budget LIMIT 20")
 
-query("SELECT * 
-FROM six_budget 
-WHERE budget_fund_name == 'General Fund'
-AND CAST(amount AS REAL) <= 1699.72;")
+query("SELECT gl_full, gl_number, year_to_date_thru_06_30_25
+FROM five
+WHERE cast(year_to_date_thru_06_30_25 as real) <  2700
+AND CAST(substr(gl_full, 9, 1) AS INTEGER) < 7
+ORDER BY cast(year_to_date_thru_06_30_25 as real) DESC;")
 
-query("WITH revs as (SELECT sum(amount) as revenue
-FROM six_budget 
-WHERE budget_fund_name == 'Local Street Fund' 
-AND CAST(substr(gl_number, 9, 1) AS INTEGER) < 7),
-exps as (SELECT sum(amount) as expenditure
-FROM six_budget 
-WHERE budget_fund_name == 'Local Street Fund' 
-AND CAST(substr(gl_number, 9, 1) AS INTEGER) >= 7)
+query("WITH revs as (SELECT sum(year_to_date_thru_06_30_25) as revenue
+FROM five
+WHERE CAST(substr(gl_full, 9, 1) AS INTEGER) < 7),
+exps as (SELECT sum(year_to_date_thru_06_30_25) as expenditure
+FROM five
+WHERE CAST(substr(gl_full, 9, 1) AS INTEGER) >= 7)
 SELECT revs.revenue, exps.expenditure, (revs.revenue - exps.expenditure) as net_budget
 FROM revs, exps;")
 
