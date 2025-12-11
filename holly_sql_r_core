@@ -224,7 +224,7 @@ if (file.exists(DB_PATH)) {
 import_all_sheets(excel_path, DB_PATH)
 
 
-query("PRAGMA table_info(as_of_6_30_21);")
+query("PRAGMA table_info(budget_final);")
 query("SELECT * FROM as_of_6_30_21 LIMIT 5")
 
 #table_name <- "as_of_6_30_24"
@@ -239,6 +239,8 @@ execute_sql("UPDATE as_of_6_30_24 SET gl_number = '101' WHERE fund_number = '101
 execute_sql("UPDATE as_of_6_30_25 SET gl_number = '818.005' WHERE fund_number = '101' AND department_number = '250' AND gl_number = '490.005';")
 execute_sql("UPDATE as_of_6_30_25 SET department_number = '250' WHERE fund_number = '101' AND department_number = '250' AND gl_number = '490.005';")
 execute_sql("UPDATE as_of_6_30_25 SET gl_number = '101' WHERE fund_number = '101' AND department_number = '250' AND gl_number = '490.005';")
+execute_sql("UPDATE general_25_26 SET gl_number = '101-250-818.005' WHERE gl_number = '101-250-490.005';")
+
 execute_sql("DROP TABLE IF EXISTS six_budget;")
 execute_sql("CREATE TABLE six_budget 
 AS 
@@ -270,10 +272,10 @@ FROM as_of_6_30_25;")
 execute_sql("DROP TABLE IF EXISTS budget_data;")
 execute_sql("CREATE TABLE budget_data
 AS
-WITH unified as (SELECT COALESCE(one.fund_name, two.fund_name, three.fund_name, four.fund_name, five.fund_name, six.budget_fund_name) as fund_name,
-                COALESCE(one.department_name, two.department_name, three.department_name, four.department_name, five.department_name, six.department_name) as department_name,
+WITH unified as (SELECT --COALESCE(one.fund_name, two.fund_name, three.fund_name, four.fund_name, five.fund_name, six.budget_fund_name) as fund_name,
+                --COALESCE(one.department_name, two.department_name, three.department_name, four.department_name, five.department_name, six.department_name) as department_name,
                 COALESCE(one.gl_number, two.gl_number, three.gl_number, four.gl_full, five.gl_full, six.gl_number) as gl_number,
-                COALESCE(one.description, two.description, three.description, four.description, five.description, six.description) as description,
+                --COALESCE(one.description, two.description, three.description, four.description, five.description, six.description) as description,
                 sum(COALESCE(CAST(one.as_of_06_30_2021 AS REAL), 0)) as amount_2021,
                 sum(COALESCE(CAST(two.as_of_06_30_2022 AS REAL), 0)) as amount_2022,
                 sum(COALESCE(CAST(three.balance_as_of_06_30_2023 AS REAL), 0)) as amount_2023,
@@ -286,14 +288,25 @@ FULL OUTER JOIN as_of_6_30_23 three ON one.gl_number = three.gl_number
 FULL OUTER JOIN four ON one.gl_number = four.gl_full
 FULL OUTER JOIN five ON one.gl_number = five.gl_full
 FULL OUTER JOIN six_budget six ON one.gl_number = six.gl_number
-GROUP BY 1, 2, 3, 4
-ORDER BY gl_number ASC)
+GROUP BY 1
+ORDER BY gl_number ASC),
+unified_names as (SELECT unified.*,
+COALESCE(one.fund_name, two.fund_name, three.fund_name, four.fund_name, five.fund_name, six.budget_fund_name) as fund_name,
+COALESCE(one.department_name, two.department_name, three.department_name, four.department_name, five.department_name, six.department_name) as department_name,
+COALESCE(one.description, two.description, three.description, four.description, five.description, six.description) as description
+FROM unified
+LEFT JOIN as_of_6_30_21 one ON unified.gl_number = one.gl_number
+LEFT JOIN as_of_6_30_22 two ON unified.gl_number = two.gl_number
+LEFT JOIN as_of_6_30_23 three ON unified.gl_number = three.gl_number
+LEFT JOIN four ON unified.gl_number = four.gl_full
+LEFT JOIN five ON unified.gl_number = five.gl_full
+LEFT JOIN six_budget six ON unified.gl_number = six.gl_number)
 SELECT *,
 SUBSTR(gl_number, 1, 3) as fund_number,
 substr(gl_number, 5, 3) as department_number,
 substr(gl_number, 9, 7) as object_number,
 case when CAST(substr(gl_number, 9, 1) AS INTEGER) < 7 then 'Revenue' else 'Expenditure' end as account_type
-FROM unified WHERE (amount_2021 + amount_2022 + amount_2023 + amount_2024 + amount_2025 + amount_2026) != 0;")
+FROM unified_names WHERE (amount_2021 + amount_2022 + amount_2023 + amount_2024 + amount_2025 + amount_2026) != 0;")
 execute_sql("DROP TABLE IF EXISTS budget_final;")
 execute_sql("CREATE TABLE budget_final AS 
 SELECT account_type,
@@ -314,7 +327,9 @@ FROM budget_data;")
 #query("SELECT DISTINCT year_to_date_thru_06_30_25, typeof(year_to_date_thru_06_30_25) as data_type FROM as_of_6_30_25 WHERE year_to_date_thru_06_30_25 IS NOT NULL LIMIT 10")
 
 # Step 3: Query the temp table (use query for SELECT statements)
-query("SELECT * FROM budget LIMIT 20")
+query("SELECT *
+FROM budget_data
+WHERE gl_number == '101-000-439.000';")
 
 query("SELECT gl_full, gl_number, year_to_date_thru_06_30_25
 FROM five
@@ -499,6 +514,6 @@ export_to_csv <- function(table_name, output_file = NULL) {
 # Export options - choose one:
 
 # Option 1: Simple Excel export of budget table  
-export_to_excel("budget_final", "holly_budget_3.xlsx")
+export_to_excel("budget_final", "holly_budget_5.xlsx")
 
 
